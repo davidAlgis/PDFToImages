@@ -1,84 +1,71 @@
 import argparse
-from pypdf import PdfReader
-from PIL import Image
-import io
 import os
 
-
-def str2bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
+import fitz  # PyMuPDF
 
 
-def extract_images_from_pdf(pdf_path, output_folder, extension):
+def render_pdf_to_images(pdf_path, output_folder, extension):
     try:
-        reader = PdfReader(pdf_path)
+        doc = fitz.open(pdf_path)
     except FileNotFoundError:
         print(f"Error: The file '{pdf_path}' was not found.")
+        exit(1)
+    except Exception as e:
+        print(f"Error opening PDF: {e}")
         exit(1)
 
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
 
-    for page_num, page in enumerate(reader.pages):
-        if '/XObject' in page['/Resources']:
-            xObject = page['/Resources']['/XObject'].get_object()
+    # Clean the extension string just in case
+    if not extension.startswith("."):
+        extension = "." + extension
 
-            for obj in xObject:
-                if xObject[obj]['/Subtype'] == '/Image':
-                    size = (xObject[obj]['/Width'], xObject[obj]['/Height'])
-                    data = xObject[obj].get_data()
+    for page_num in range(len(doc)):
+        page = doc[page_num]
 
-                    if xObject[obj]['/ColorSpace'] == '/DeviceRGB':
-                        mode = "RGB"
-                    else:
-                        mode = "P"
+        # Matrix sets the resolution. 4.0x zoom gives a beautiful, crisp 288 DPI output
+        # perfect for capturing fine details like font edges and the silver strokes.
+        zoom = 4.0
+        mat = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat)
 
-                    if '/Filter' in xObject[obj]:
-                        if xObject[obj]['/Filter'] == '/FlateDecode':
-                            img = Image.frombytes(mode, size, data)
-                        elif xObject[obj]['/Filter'] == '/DCTDecode':
-                            img = Image.open(io.BytesIO(data))
-                        elif xObject[obj]['/Filter'] == '/JPXDecode':
-                            img = Image.open(io.BytesIO(data))
-                        else:
-                            img = None
-                    else:
-                        img = Image.frombytes(mode, size, data)
+        # Build output filename
+        img_name = f"page_{page_num + 1}{extension}"
+        img_path = os.path.join(output_folder, img_name)
 
-                    if img:
-                        img_path = os.path.join(
-                            output_folder,
-                            f"page_{page_num + 1}_{obj[1:]}{extension}")
-                        img.save(img_path)
-                        print(f"Saved image: {img_path}")
+        # Save the rendered image
+        pix.save(img_path)
+        print(f"Saved rendered page: {img_path}")
 
 
 parser = argparse.ArgumentParser(
-    description="Extract images from each page of a PDF file")
-parser.add_argument('-i',
-                    '--input',
-                    type=str,
-                    required=True,
-                    help='The PDF file to process')
-parser.add_argument('-o',
-                    '--output',
-                    type=str,
-                    required=True,
-                    help='The folder to save the extracted images')
-parser.add_argument('-e',
-                    '--extension',
-                    type=str,
-                    default='.png',
-                    help='The image file extension (e.g., .jpeg, .png)')
+    description="Render pages of a PDF file into images"
+)
+parser.add_argument(
+    "-i", "--input", type=str, required=True, help="The PDF file to process"
+)
+parser.add_argument(
+    "-o",
+    "--output",
+    type=str,
+    required=False,
+    default=None,
+    help="The folder to save the images (defaults to the input PDF folder)",
+)
+parser.add_argument(
+    "-e",
+    "--extension",
+    type=str,
+    default=".jpeg",
+    help="The image file extension (default: .jpeg)",
+)
 
 args = parser.parse_args()
 
-extract_images_from_pdf(args.input, args.output, args.extension)
-print(f"Images extracted and saved to {args.output}")
+# If no output folder is supplied, default to the folder of the input PDF
+if args.output is None:
+    args.output = os.path.dirname(os.path.abspath(args.input))
+
+render_pdf_to_images(args.input, args.output, args.extension)
+print(f"Processing complete. Images saved to {args.output}")
